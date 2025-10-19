@@ -1,0 +1,14 @@
+{
+  "name": "@wainao/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "wainao-cli": "src/index.ts"
+  },
+  "scripts": {
+    "start": "TS_NODE_TRANSPILE_ONLY=1 ts-node --esm src/index.ts",
+    "export": "node -e \"console.log('TODO: export shortcut index');\"",
+    "status": "node -e \"console.log('TODO: print index status');\""
+  }
+}

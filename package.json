@@ -1,0 +1,43 @@
+{
+  "name": "wainao-hotkey",
+  "private": true,
+  "version": "0.1.0",
+  "description": "macOS 快捷键统一管理工具",
+  "license": "MIT",
+  "packageManager": "yarn@1.22.22",
+  "workspaces": [
+    "app",
+    "core",
+    "packages/cli"
+  ],
+  "scripts": {
+    "dev:app": "yarn workspace @wainao/app run dev",
+    "dev:core": "node -e \"console.log('TODO: start core scanner watcher');\"",
+    "scanner:full": "node -e \"console.log('TODO: trigger full shortcut scan');\"",
+    "cli": "yarn workspace @wainao/cli run start --",
+    "cli:export": "yarn workspace @wainao/cli run export",
+    "cli:status": "yarn workspace @wainao/cli run status",
+    "build": "node -e \"console.log('TODO: bundle application');\"",
+    "package": "node -e \"console.log('TODO: create distributable package');\"",
+    "build:native": "node -e \"console.log('TODO: compile native bindings');\"",
+    "test:unit": "yarn workspaces foreach -pt run test:unit",
+    "test:integration": "yarn workspaces foreach -pt run test:integration",
+    "test:e2e": "yarn workspace @wainao/app run test:e2e"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.1",
+    "electron": "^31.0.0",
+    "pinia": "^2.1.7",
+    "vite": "^5.4.0",
+    "vue": "^3.4.31"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "eslint": "^8.57.0",
+    "concurrently": "^8.2.2",
+    "prettier": "^3.3.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

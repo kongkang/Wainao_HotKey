@@ -67,7 +67,6 @@ App 自定义快捷键	用户定义或默认菜单快捷键	defaults read <bundl
 网页快捷键	JS 注册与浏览器扩展快捷键	浏览器扩展 + Content Script
 全局占用检测	判断是否注册相同组合	尝试注册全局热键测试冲突
 
-
 ⸻
 
 五、数据结构与索引设计
@@ -89,7 +88,6 @@ interface ConflictGroup {
   entries: ShortcutEntry[];
   level: "none" | "intra-app" | "inter-app" | "system-vs-app";
 }
-
 
 ⸻
 
@@ -121,7 +119,6 @@ interface ConflictGroup {
 删除快捷键	defaults delete <domain> NSUserKeyEquivalents "<菜单>"
 打开系统设置页	open "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts"
 检测焦点与菜单	Accessibility API (AXUIElement)
-
 
 ⸻
 
@@ -193,3 +190,15 @@ interface ConflictGroup {
 
 该工具通过“长按 Command 呼出浮动层 + 全局索引窗口”的双层结构，为 macOS 用户提供一个随时可查、上下文感知的快捷键观察与管理系统。
 它让用户在任何场景下都能即时获知当前可用快捷键、其来源及冲突情况，并在稳定窗口中进行进一步管理和修改。
+
+⸻
+
+## 实现进度概览
+
+- ✅ 目录与工作区脚手架已搭建（Electron + Vue + Node 栈）。
+- ✅ 引入 Vite + Vue + Electron 调试模式，根目录执行 `yarn dev:app` 即可在桌面以 `Command+Shift+Space` 唤起浮动层原型（`Esc` 关闭）。
+- ✅ SQLite 架构与索引服务已添加，导出服务可生成 JSON/CSV（当前为占位实现）。
+- ✅ CLI 占位实现支持 `status` 与 `export` 命令（尚待接入真实服务）。
+- ⚠️ 与 macOS 的真实交互仍待接入，当前浮动层依赖模拟数据。
+
+更多详情请参阅 `docs/ROADMAP.md` 与 `specs/001-readme/quickstart.md`。

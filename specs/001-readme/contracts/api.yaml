@@ -1,0 +1,275 @@
+openapi: 3.1.0
+info:
+  title: Wainao HotKey Core IPC
+  version: 0.1.0
+  description: >
+    Electron 主进程通过本地 HTTP/IPC 网关暴露的接口，供浮动层与稳定窗口获取快捷键索引、
+    检测权限状态、触发导出操作。所有响应均为 JSON。
+servers:
+  - url: http://127.0.0.1:65321
+    description: 应用启动后由主进程监听的本地端口（仅限回环）
+
+paths:
+  /overlay/context:
+    post:
+      summary: 触发浮动层数据显示
+      operationId: showOverlay
+      description: >
+        根据当前上下文（应用、窗口、焦点）返回可展示的快捷键清单，并记录触发时间用于性能统计。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextSnapshotInput'
+      responses:
+        '200':
+          description: 浮动层展示所需数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverlayPayload'
+        '403':
+          description: 必要权限缺失
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionError'
+
+  /overlay/hide:
+    post:
+      summary: 通知主进程隐藏浮动层
+      operationId: hideOverlay
+      responses:
+        '204':
+          description: 隐藏成功
+
+  /shortcuts:
+    get:
+      summary: 查询快捷键索引
+      operationId: listShortcuts
+      parameters:
+        - name: bundleId
+          in: query
+          schema:
+            type: string
+          description: 过滤指定应用或扩展
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [system, app, web]
+        - name: normalizedCombo
+          in: query
+          schema:
+            type: string
+          description: 精确匹配组合键
+        - name: conflict
+          in: query
+          schema:
+            type: string
+            enum: [none, intra-app, inter-app, system-vs-app, web-vs-app]
+      responses:
+        '200':
+          description: 匹配的快捷键集合
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ShortcutEntry'
+                  total:
+                    type: integer
+
+  /conflicts:
+    get:
+      summary: 获取冲突分组列表
+      operationId: listConflicts
+      parameters:
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [intra-app, inter-app, system-vs-app, web-vs-app]
+      responses:
+        '200':
+          description: 冲突分组集合
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConflictGroup'
+                  total:
+                    type: integer
+
+  /export:
+    post:
+      summary: 导出当前索引
+      operationId: exportIndex
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum: [json, csv]
+                includeConflicts:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: 导出任务已生成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  filePath:
+                    type: string
+                  generatedAt:
+                    type: string
+                    format: date-time
+
+  /permissions/status:
+    get:
+      summary: 检测必需权限状态
+      operationId: getPermissionStatus
+      responses:
+        '200':
+          description: 权限状态详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionStatus'
+
+components:
+  schemas:
+    ContextSnapshotInput:
+      type: object
+      required: [bundleId, appName, windowTitle, focusedElementType, triggeredAt]
+      properties:
+        bundleId:
+          type: string
+        appName:
+          type: string
+        windowTitle:
+          type: string
+        focusedElementType:
+          type: string
+          enum: [menu, text-input, editor, browser, other]
+        triggeredAt:
+          type: string
+          format: date-time
+        probeMode:
+          type: boolean
+          default: false
+
+    OverlayPayload:
+      type: object
+      properties:
+        shortcuts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShortcutEntry'
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConflictGroup'
+        recommendations:
+          type: array
+          items:
+            type: string
+        latencyBudgetMs:
+          type: integer
+          description: 用于前端渲染的剩余时间预算
+
+    ShortcutEntry:
+      type: object
+      required: [id, scope, rawCombo, normalizedCombo, target, editable]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scope:
+          type: string
+          enum: [system, app, web]
+        bundleId:
+          type: string
+        appName:
+          type: string
+        rawCombo:
+          type: string
+        normalizedCombo:
+          type: string
+        humanLabel:
+          type: string
+        target:
+          type: string
+        sourceFile:
+          type: string
+        editable:
+          type: boolean
+        lastSeenAt:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ConflictGroup:
+      type: object
+      required: [id, normalizedCombo, level, entryIds]
+      properties:
+        id:
+          type: string
+          format: uuid
+        normalizedCombo:
+          type: string
+        level:
+          type: string
+          enum: [none, intra-app, inter-app, system-vs-app, web-vs-app]
+        entryIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        firstDetectedAt:
+          type: string
+          format: date-time
+        notes:
+          type: string
+
+    PermissionStatus:
+      type: object
+      properties:
+        accessibility:
+          type: string
+          enum: [granted, denied, unknown]
+        automation:
+          type: string
+          enum: [granted, denied, unknown]
+        preferencesReadable:
+          type: boolean
+        lastCheckedAt:
+          type: string
+          format: date-time
+
+    PermissionError:
+      type: object
+      properties:
+        missingPermissions:
+          type: array
+          items:
+            type: string
+        recoveryHint:
+          type: string

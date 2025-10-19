@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "moduleDetection": "force",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist/ts-build",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["core/*"],
+      "@app/*": ["app/*"],
+      "@cli/*": ["packages/cli/src/*"]
+    }
+  },
+  "include": [
+    "core/**/*.ts",
+    "packages/cli/src/**/*.ts",
+    "app/renderer/src/**/*.ts",
+    "app/renderer/src/**/*.vue"
+  ],
+  "exclude": ["tests", "dist"]
+}

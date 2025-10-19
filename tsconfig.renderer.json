@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist/renderer",
+    "rootDir": "app/renderer/src",
+    "types": ["vite/client"],
+    "paths": {
+      "@renderer/*": ["app/renderer/src/*"],
+      "@stores/*": ["app/renderer/src/stores/*"],
+      "@components/*": ["app/renderer/src/components/*"]
+    }
+  },
+  "include": ["app/renderer/src", "app/renderer/src/env.d.ts"],
+  "exclude": ["node_modules", "dist"]
+}
