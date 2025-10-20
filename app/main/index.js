@@ -67,10 +67,17 @@ const fallbackPayload = {
 };
 
 const IPC_PORT = 65321;
+const LONG_PRESS_THRESHOLD_MS = 450;
 let ipcServer = null;
+let devServer = null;
+let devServerFailed = false;
 
 const demoShortcuts = [...fallbackPayload.shortcuts];
 const demoConflicts = [...fallbackPayload.conflicts];
+
+function logBoot(message, extra = {}) {
+  console.log(`[boot] ${message}`, Object.keys(extra).length ? extra : '');
+}
 
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -124,6 +131,7 @@ function startIpcServer() {
   }
 
   ipcServer = http.createServer((req, res) => {
+    const startTime = Date.now();
     (async () => {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -142,6 +150,8 @@ function startIpcServer() {
       }
 
       const url = new URL(req.url, 'http://127.0.0.1');
+      const routeTag = `${req.method ?? 'UNKNOWN'} ${url.pathname}`;
+      console.info(`[ipc] ${routeTag} hit`);
 
       if (url.pathname === '/overlay/context' && req.method === 'POST') {
         try {
@@ -203,16 +213,56 @@ function startIpcServer() {
         res.statusCode = 500;
       }
       res.end(JSON.stringify({ message: 'Internal Server Error' }));
+    }).finally(() => {
+      const duration = Date.now() - startTime;
+      console.info(`[ipc] request completed in ${duration}ms`);
     });
   });
 
   ipcServer.listen(IPC_PORT, '127.0.0.1', () => {
     console.log(`[ipc] mock server listening on http://127.0.0.1:${IPC_PORT}`);
   });
+  ipcServer.on('error', (error) => {
+    console.error('[ipc] server error', error);
+  });
 }
 
-function loadWindow(window, hash = '') {
-  if (isDev) {
+async function startDevServer() {
+  if (!isDev || devServer) {
+    return devServer;
+  }
+  logBoot('starting Vite dev server', { port: DEV_SERVER_PORT });
+
+  try {
+    const { createServer } = await import('vite');
+    const configModule = await import('../vite.config.js');
+    const config = configModule.default;
+    devServer = await createServer({
+      ...config,
+      configFile: false,
+      server: {
+        ...config.server,
+        host: '127.0.0.1',
+        port: DEV_SERVER_PORT,
+        strictPort: true,
+        open: false
+      }
+    });
+    await devServer.listen();
+    const actualPort = devServer.config.server.port;
+    logBoot('Vite dev server ready', { port: actualPort, url: `http://127.0.0.1:${actualPort}/` });
+    return devServer;
+  } catch (error) {
+    devServer = null;
+    devServerFailed = true;
+    logBoot('failed to start Vite dev server', { error: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
+function loadWindow(window, hash = '', options = {}) {
+  const shouldUseBundle = options.forceFile ?? false;
+  if (isDev && !shouldUseBundle) {
     void window.loadURL(`http://127.0.0.1:${DEV_SERVER_PORT}/${hash}`);
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/index.html');
@@ -250,7 +300,7 @@ function createOverlayWindow() {
     overlayWindow = null;
   });
 
-  ensureWindowLoaded(overlayWindow, '#/overlay');
+  ensureWindowLoaded(overlayWindow, '#/overlay', { forceFileInitial: devServerFailed });
   return overlayWindow;
 }
 
@@ -277,7 +327,7 @@ function createStableWindow() {
     stableWindow?.hide();
   });
 
-  ensureWindowLoaded(stableWindow, '#/');
+  ensureWindowLoaded(stableWindow, '#/', { forceFileInitial: devServerFailed });
   return stableWindow;
 }
 
@@ -322,6 +372,62 @@ function registerShortcuts() {
   });
 }
 
+function attachCommandDetection(window) {
+  if (window.__wainaoCommandDetectionAttached) {
+    return;
+  }
+  window.__wainaoCommandDetectionAttached = true;
+
+  let commandTimer = null;
+  let overlayShownFromHold = false;
+
+  const clearTimer = () => {
+    if (commandTimer) {
+      clearTimeout(commandTimer);
+      commandTimer = null;
+    }
+  };
+
+  const hideOverlay = () => {
+    if (overlayShownFromHold) {
+      console.info('[overlay] hiding overlay after Command release');
+      toggleOverlay(false);
+      overlayShownFromHold = false;
+    }
+  };
+
+  window.on('blur', () => {
+    clearTimer();
+    hideOverlay();
+  });
+
+  window.webContents.on('before-input-event', (_event, input) => {
+    const isCommandKey =
+      input.key === 'Meta' || input.code === 'MetaLeft' || input.code === 'MetaRight';
+    if (!isCommandKey) {
+      return;
+    }
+
+    if (input.type === 'keyDown') {
+      if (overlayShownFromHold || commandTimer || input.isAutoRepeat) {
+        return;
+      }
+      commandTimer = setTimeout(() => {
+        commandTimer = null;
+        overlayShownFromHold = true;
+        console.info('[overlay] Command long press detected, showing overlay');
+        toggleOverlay(true);
+      }, LONG_PRESS_THRESHOLD_MS);
+      return;
+    }
+
+    if (input.type === 'keyUp') {
+      clearTimer();
+      hideOverlay();
+    }
+  });
+}
+
 function createMenu() {
   const menuTemplate = [
     {
@@ -350,11 +456,34 @@ function createMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 }
 
-function ensureWindowLoaded(window, hash) {
-  loadWindow(window, hash);
-  window.webContents.on('did-fail-load', () => {
-    setTimeout(() => loadWindow(window, hash), 200);
+function ensureWindowLoaded(window, hash, options = {}) {
+  let retryCount = 0;
+  let fellBackToBundle = Boolean(options.forceFileInitial);
+
+  const attemptLoad = () => {
+    loadWindow(window, hash, { forceFile: fellBackToBundle });
+  };
+
+  window.webContents.on('did-finish-load', () => {
+    console.info(`[window] loaded ${hash || '/'} (retries: ${retryCount})`);
   });
+
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    retryCount += 1;
+    console.error(
+      `[window] load failed (#${retryCount})`,
+      { errorCode, errorDescription, validatedURL, hash }
+    );
+    if (isDev && retryCount >= 25 && !fellBackToBundle) {
+      console.error('[window] dev server unreachable after ~5s, falling back to built assets');
+      fellBackToBundle = true;
+      loadWindow(window, hash, { forceFile: true });
+      return;
+    }
+    setTimeout(attemptLoad, 200);
+  });
+
+  attemptLoad();
 }
 
 app.whenReady().then(async () => {
@@ -362,23 +491,10 @@ app.whenReady().then(async () => {
 
   startIpcServer();
 
-  if (isDev) {
-    const { createServer } = await import('vite');
-    const configModule = await import('../vite.config.js');
-    const config = configModule.default;
-    const server = await createServer({
-      ...config,
-      configFile: false,
-      server: {
-        ...config.server,
-        port: DEV_SERVER_PORT,
-        strictPort: true
-      }
-    });
-    await server.listen();
-  }
+  await startDevServer();
 
   const window = createStableWindow();
+  attachCommandDetection(window);
   window.show();
   window.focus();
   registerShortcuts();
@@ -392,12 +508,21 @@ app.on('will-quit', () => {
       ipcServer = null;
     });
   }
+  if (devServer) {
+    logBoot('shutting down Vite dev server');
+    devServer
+      .close()
+      .catch((error) => console.error('[boot] failed to stop Vite dev server', error))
+      .finally(() => {
+        devServer = null;
+      });
+  }
 });
 
 app.on('activate', () => {
-  if (!stableWindow) {
-    createStableWindow().show();
-  }
+  const window = createStableWindow();
+  attachCommandDetection(window);
+  window.show();
 });
 
 app.on('window-all-closed', () => {

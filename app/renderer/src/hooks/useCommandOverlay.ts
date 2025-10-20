@@ -83,9 +83,10 @@ async function fetchOverlayPayload(options: FetchOverlayOptions): Promise<Overla
       throw new Error(`Request failed with status ${response.status}`);
     }
     const data = (await response.json()) as OverlayPayload;
+    console.info('[overlay] 成功获取上下文数据', { shortcuts: data.shortcuts.length });
     return data;
   } catch (error) {
-    console.info('[overlay] 使用演示数据渲染浮动层', error);
+    console.warn('[overlay] 获取上下文失败，回退到演示数据', error);
     return fallbackPayload;
   }
 }
@@ -100,6 +101,7 @@ export function useCommandOverlay() {
       return;
     }
     timer = window.setTimeout(async () => {
+      console.info('[overlay] 检测到 Command 长按，准备加载浮动层数据');
       const context: ContextSnapshot = {
         ...fallbackContext,
         timestamp: new Date().toISOString()
@@ -116,20 +118,22 @@ export function useCommandOverlay() {
     }
     store.hideOverlay();
     if (!isElectron) {
-      void fetch('http://127.0.0.1:65321/overlay/hide', { method: 'POST' }).catch(() => {
-        /* 本地演示模式，无需处理 */
+      void fetch('http://127.0.0.1:65321/overlay/hide', { method: 'POST' }).catch((error) => {
+        console.warn('[overlay] 通知主进程隐藏浮动层失败（演示模式）', error);
       });
     }
   };
 
   const keyDownListener = (event: KeyboardEvent) => {
     if (event.metaKey && event.key === 'Meta' && timer === null) {
+      console.debug('[overlay] 捕获到 Command 按下');
       handleCommandPressStart();
     }
   };
 
   const keyUpListener = (event: KeyboardEvent) => {
     if (event.key === 'Meta') {
+      console.debug('[overlay] 捕获到 Command 松开');
       handleCommandRelease();
     }
   };
