@@ -1,11 +1,13 @@
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, 'renderer');
 const workspaceRoot = resolve(__dirname, '..');
 
-export default defineConfig({
+const config = defineConfig({
   root: rootDir,
   plugins: [vue()],
   resolve: {
@@ -32,3 +34,5 @@ export default defineConfig({
     emptyOutDir: true
   }
 });
+
+export default config;

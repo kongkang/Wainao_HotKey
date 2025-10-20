@@ -5,11 +5,10 @@
   "type": "module",
   "main": "main/index.js",
   "scripts": {
-    "dev": "concurrently -k \"yarn run dev:renderer\" \"yarn run dev:electron\"",
-    "dev:renderer": "vite --config vite.config.ts",
-    "dev:electron": "NODE_ENV=development electron .",
-    "build": "vite build --config vite.config.ts",
-    "preview": "vite preview --config vite.config.ts",
+    "dev": "NODE_ENV=development electron .",
+    "dev:renderer": "vite --config vite.config.js",
+    "build": "vite build --config vite.config.js",
+    "preview": "vite preview --config vite.config.js",
     "test:e2e": "node -e \"console.log('TODO: run Playwright e2e tests');\""
   },
   "dependencies": {
