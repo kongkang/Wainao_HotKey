@@ -2,6 +2,9 @@ import { app, BrowserWindow, Menu, nativeTheme, globalShortcut, screen } from 'e
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import uiohookModule from './uiohook.cjs';
+
+const { uIOhook, UiohookKey } = uiohookModule;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,6 +74,11 @@ const LONG_PRESS_THRESHOLD_MS = 450;
 let ipcServer = null;
 let devServer = null;
 let devServerFailed = false;
+let commandHoldTimer = null;
+let overlayShownFromHold = false;
+let uiohookStarted = false;
+let uiohookKeydownHandler = null;
+let uiohookKeyupHandler = null;
 
 const demoShortcuts = [...fallbackPayload.shortcuts];
 const demoConflicts = [...fallbackPayload.conflicts];
@@ -362,69 +370,103 @@ function toggleOverlay(show) {
 }
 
 function registerShortcuts() {
-  globalShortcut.register('CommandOrControl+Shift+Space', () => {
+  const cancelHoldTimer = () => {
+    if (!commandHoldTimer) {
+      return;
+    }
+    clearTimeout(commandHoldTimer);
+    commandHoldTimer = null;
+  };
+
+  const markOverlayShownFromHold = () => {
+    overlayShownFromHold = true;
+    toggleOverlay(true);
+  };
+
+  const resetOverlayHoldState = () => {
+    overlayShownFromHold = false;
+  };
+
+  const registerShortcut = (accelerator, handler) => {
+    const ok = globalShortcut.register(accelerator, handler);
+    if (!ok) {
+      console.error(`[shortcut] failed to register ${accelerator}`);
+    }
+  };
+
+  registerShortcut('Command', () => {
+    if (overlayShownFromHold || commandHoldTimer) {
+      return;
+    }
+    commandHoldTimer = setTimeout(() => {
+      commandHoldTimer = null;
+      console.info('[shortcut] Command long press detected, showing overlay');
+      markOverlayShownFromHold();
+    }, LONG_PRESS_THRESHOLD_MS);
+  });
+
+  registerShortcut('CommandUp', () => {
+    cancelHoldTimer();
+    if (overlayShownFromHold) {
+      console.info('[shortcut] Command released, hiding overlay');
+      resetOverlayHoldState();
+      toggleOverlay(false);
+    }
+  });
+
+  const commandKeyCodes = new Set([UiohookKey.Meta, UiohookKey.MetaRight]);
+
+  if (!uiohookKeydownHandler) {
+    uiohookKeydownHandler = (event) => {
+      if (commandKeyCodes.has(event.keycode)) {
+        if (overlayShownFromHold || commandHoldTimer) {
+          return;
+        }
+        commandHoldTimer = setTimeout(() => {
+          commandHoldTimer = null;
+          console.info('[shortcut] Command long press detected, showing overlay');
+          markOverlayShownFromHold();
+        }, LONG_PRESS_THRESHOLD_MS);
+      }
+    };
+    uIOhook.on('keydown', uiohookKeydownHandler);
+  }
+
+  if (!uiohookKeyupHandler) {
+    uiohookKeyupHandler = (event) => {
+      if (!commandKeyCodes.has(event.keycode)) {
+        return;
+      }
+      cancelHoldTimer();
+      if (overlayShownFromHold) {
+        console.info('[shortcut] Command released, hiding overlay');
+        resetOverlayHoldState();
+        toggleOverlay(false);
+      }
+    };
+    uIOhook.on('keyup', uiohookKeyupHandler);
+  }
+
+  if (!uiohookStarted) {
+    try {
+      uIOhook.start();
+      uiohookStarted = true;
+    } catch (error) {
+      console.error('[shortcut] failed to start global input hook', error);
+    }
+  }
+
+  registerShortcut('CommandOrControl+Shift+Space', () => {
+    cancelHoldTimer();
+    resetOverlayHoldState();
     const shouldShow = !overlayWindow || !overlayWindow.isVisible();
     toggleOverlay(shouldShow);
   });
 
-  globalShortcut.register('Escape', () => {
+  registerShortcut('Escape', () => {
+    cancelHoldTimer();
+    resetOverlayHoldState();
     toggleOverlay(false);
-  });
-}
-
-function attachCommandDetection(window) {
-  if (window.__wainaoCommandDetectionAttached) {
-    return;
-  }
-  window.__wainaoCommandDetectionAttached = true;
-
-  let commandTimer = null;
-  let overlayShownFromHold = false;
-
-  const clearTimer = () => {
-    if (commandTimer) {
-      clearTimeout(commandTimer);
-      commandTimer = null;
-    }
-  };
-
-  const hideOverlay = () => {
-    if (overlayShownFromHold) {
-      console.info('[overlay] hiding overlay after Command release');
-      toggleOverlay(false);
-      overlayShownFromHold = false;
-    }
-  };
-
-  window.on('blur', () => {
-    clearTimer();
-    hideOverlay();
-  });
-
-  window.webContents.on('before-input-event', (_event, input) => {
-    const isCommandKey =
-      input.key === 'Meta' || input.code === 'MetaLeft' || input.code === 'MetaRight';
-    if (!isCommandKey) {
-      return;
-    }
-
-    if (input.type === 'keyDown') {
-      if (overlayShownFromHold || commandTimer || input.isAutoRepeat) {
-        return;
-      }
-      commandTimer = setTimeout(() => {
-        commandTimer = null;
-        overlayShownFromHold = true;
-        console.info('[overlay] Command long press detected, showing overlay');
-        toggleOverlay(true);
-      }, LONG_PRESS_THRESHOLD_MS);
-      return;
-    }
-
-    if (input.type === 'keyUp') {
-      clearTimer();
-      hideOverlay();
-    }
   });
 }
 
@@ -493,16 +535,32 @@ app.whenReady().then(async () => {
 
   await startDevServer();
 
+  const shouldShowMainOnBoot = process.env.WAINAO_SHOW_MAIN_ON_BOOT === '1';
   const window = createStableWindow();
-  attachCommandDetection(window);
-  window.show();
-  window.focus();
+
+  if (shouldShowMainOnBoot) {
+    window.show();
+    window.focus();
+  }
+
   registerShortcuts();
   createMenu();
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (uiohookKeydownHandler) {
+    uIOhook.removeListener('keydown', uiohookKeydownHandler);
+    uiohookKeydownHandler = null;
+  }
+  if (uiohookKeyupHandler) {
+    uIOhook.removeListener('keyup', uiohookKeyupHandler);
+    uiohookKeyupHandler = null;
+  }
+  if (uiohookStarted) {
+    uIOhook.stop();
+    uiohookStarted = false;
+  }
   if (ipcServer) {
     ipcServer.close(() => {
       ipcServer = null;
@@ -521,7 +579,6 @@ app.on('will-quit', () => {
 
 app.on('activate', () => {
   const window = createStableWindow();
-  attachCommandDetection(window);
   window.show();
 });
 

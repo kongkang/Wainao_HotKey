@@ -1644,6 +1644,11 @@ node-abi@^3.3.0:
   dependencies:
     semver "^7.3.5"
 
+node-gyp-build@4.x.x:
+  version "4.8.4"
+  resolved "https://registry.yarnpkg.com/node-gyp-build/-/node-gyp-build-4.8.4.tgz#8a70ee85464ae52327772a90d66c6077a900cfc8"
+  integrity sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==
+
 normalize-url@^6.0.1:
   version "6.1.0"
   resolved "https://registry.yarnpkg.com/normalize-url/-/normalize-url-6.1.0.tgz#40d0885b535deffe3f3147bec877d05fe4c5668a"
@@ -2238,6 +2243,13 @@ ufo@^1.6.1:
   version "1.6.1"
   resolved "https://registry.yarnpkg.com/ufo/-/ufo-1.6.1.tgz#ac2db1d54614d1b22c1d603e3aef44a85d8f146b"
   integrity sha512-9a4/uxlTWJ4+a5i0ooc1rU7C7YOw3wT+UGqdeNNHWnOF9qcMBgLRS+4IYUqbczewFx4mLEig6gawh7X6mFlEkA==
+
+uiohook-napi@^1.5.4:
+  version "1.5.4"
+  resolved "https://registry.yarnpkg.com/uiohook-napi/-/uiohook-napi-1.5.4.tgz#8838918c87339f183e606db90288fdbf0581f946"
+  integrity sha512-7vPVDNwgb6MwTgviA/dnF2MrW0X5xm76fAqaOAC3cEKkswqAZOPw1USu14Sr6383s5qhXegcJaR63CpJOPCNAg==
+  dependencies:
+    node-gyp-build "4.x.x"
 
 undici-types@~6.21.0:
   version "6.21.0"
