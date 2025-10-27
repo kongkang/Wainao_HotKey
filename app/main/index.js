@@ -1,6 +1,10 @@
 import { app, BrowserWindow, Menu, nativeTheme, globalShortcut, screen } from 'electron';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import uiohookModule from './uiohook.cjs';
+
+const { uIOhook, UiohookKey } = uiohookModule;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,8 +69,208 @@ const fallbackPayload = {
   recommendations: ['建议调整 DemoApp 快捷键，避免与 Spotlight 冲突']
 };
 
-function loadWindow(window, hash = '') {
-  if (isDev) {
+const IPC_PORT = 65321;
+const LONG_PRESS_THRESHOLD_MS = 450;
+let ipcServer = null;
+let devServer = null;
+let devServerFailed = false;
+let commandHoldTimer = null;
+let overlayShownFromHold = false;
+let uiohookStarted = false;
+let uiohookKeydownHandler = null;
+let uiohookKeyupHandler = null;
+
+const demoShortcuts = [...fallbackPayload.shortcuts];
+const demoConflicts = [...fallbackPayload.conflicts];
+
+function logBoot(message, extra = {}) {
+  console.log(`[boot] ${message}`, Object.keys(extra).length ? extra : '');
+}
+
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      if (!body) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(body));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function applyShortcutFilters(url) {
+  return demoShortcuts.filter((shortcut) => {
+    const bundleId = url.searchParams.get('bundleId');
+    if (bundleId && shortcut.bundleId !== bundleId) {
+      return false;
+    }
+    const scope = url.searchParams.get('scope');
+    if (scope && shortcut.scope !== scope) {
+      return false;
+    }
+    const normalizedCombo = url.searchParams.get('normalizedCombo');
+    if (normalizedCombo && shortcut.normalizedCombo !== normalizedCombo) {
+      return false;
+    }
+    const conflict = url.searchParams.get('conflict');
+    if (conflict) {
+      const level = shortcut.metadata?.conflictLevel ?? 'none';
+      if (level !== conflict) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function startIpcServer() {
+  if (ipcServer) {
+    return;
+  }
+
+  ipcServer = http.createServer((req, res) => {
+    const startTime = Date.now();
+    (async () => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
+      if (!req.url) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ message: 'Bad Request' }));
+        return;
+      }
+
+      const url = new URL(req.url, 'http://127.0.0.1');
+      const routeTag = `${req.method ?? 'UNKNOWN'} ${url.pathname}`;
+      console.info(`[ipc] ${routeTag} hit`);
+
+      if (url.pathname === '/overlay/context' && req.method === 'POST') {
+        try {
+          await parseJsonBody(req);
+        } catch (error) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: 'Invalid JSON payload' }));
+          return;
+        }
+        res.end(JSON.stringify(fallbackPayload));
+        return;
+      }
+
+      if (url.pathname === '/overlay/hide' && req.method === 'POST') {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
+      if (url.pathname === '/shortcuts' && req.method === 'GET') {
+        const items = applyShortcutFilters(url);
+        res.end(JSON.stringify({ items, total: items.length }));
+        return;
+      }
+
+      if (url.pathname === '/conflicts' && req.method === 'GET') {
+        const level = url.searchParams.get('level');
+        const items = level ? demoConflicts.filter((conflict) => conflict.level === level) : demoConflicts;
+        res.end(JSON.stringify({ items, total: items.length }));
+        return;
+      }
+
+      if (url.pathname === '/permissions/status' && req.method === 'GET') {
+        res.end(
+          JSON.stringify({
+            accessibility: { granted: true, reason: '模拟环境默认授权' },
+            automation: { granted: true, reason: '模拟环境默认授权' },
+            inputMonitoring: { granted: true, reason: '模拟环境默认授权' }
+          })
+        );
+        return;
+      }
+
+      if (url.pathname === '/export' && req.method === 'POST') {
+        res.end(
+          JSON.stringify({
+            filePath: '/tmp/wainao-hotkey-demo-export.json',
+            generatedAt: new Date().toISOString()
+          })
+        );
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end(JSON.stringify({ message: 'Not Found' }));
+    })().catch((error) => {
+      console.error('[ipc] request handling failed', error);
+      if (!res.headersSent) {
+        res.statusCode = 500;
+      }
+      res.end(JSON.stringify({ message: 'Internal Server Error' }));
+    }).finally(() => {
+      const duration = Date.now() - startTime;
+      console.info(`[ipc] request completed in ${duration}ms`);
+    });
+  });
+
+  ipcServer.listen(IPC_PORT, '127.0.0.1', () => {
+    console.log(`[ipc] mock server listening on http://127.0.0.1:${IPC_PORT}`);
+  });
+  ipcServer.on('error', (error) => {
+    console.error('[ipc] server error', error);
+  });
+}
+
+async function startDevServer() {
+  if (!isDev || devServer) {
+    return devServer;
+  }
+  logBoot('starting Vite dev server', { port: DEV_SERVER_PORT });
+
+  try {
+    const { createServer } = await import('vite');
+    const configModule = await import('../vite.config.js');
+    const config = configModule.default;
+    devServer = await createServer({
+      ...config,
+      configFile: false,
+      server: {
+        ...config.server,
+        host: '127.0.0.1',
+        port: DEV_SERVER_PORT,
+        strictPort: true,
+        open: false
+      }
+    });
+    await devServer.listen();
+    const actualPort = devServer.config.server.port;
+    logBoot('Vite dev server ready', { port: actualPort, url: `http://127.0.0.1:${actualPort}/` });
+    return devServer;
+  } catch (error) {
+    devServer = null;
+    devServerFailed = true;
+    logBoot('failed to start Vite dev server', { error: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
+function loadWindow(window, hash = '', options = {}) {
+  const shouldUseBundle = options.forceFile ?? false;
+  if (isDev && !shouldUseBundle) {
     void window.loadURL(`http://127.0.0.1:${DEV_SERVER_PORT}/${hash}`);
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/index.html');
@@ -104,7 +308,7 @@ function createOverlayWindow() {
     overlayWindow = null;
   });
 
-  ensureWindowLoaded(overlayWindow, '#/overlay');
+  ensureWindowLoaded(overlayWindow, '#/overlay', { forceFileInitial: devServerFailed });
   return overlayWindow;
 }
 
@@ -131,7 +335,7 @@ function createStableWindow() {
     stableWindow?.hide();
   });
 
-  ensureWindowLoaded(stableWindow, '#/');
+  ensureWindowLoaded(stableWindow, '#/', { forceFileInitial: devServerFailed });
   return stableWindow;
 }
 
@@ -166,12 +370,102 @@ function toggleOverlay(show) {
 }
 
 function registerShortcuts() {
-  globalShortcut.register('CommandOrControl+Shift+Space', () => {
+  const cancelHoldTimer = () => {
+    if (!commandHoldTimer) {
+      return;
+    }
+    clearTimeout(commandHoldTimer);
+    commandHoldTimer = null;
+  };
+
+  const markOverlayShownFromHold = () => {
+    overlayShownFromHold = true;
+    toggleOverlay(true);
+  };
+
+  const resetOverlayHoldState = () => {
+    overlayShownFromHold = false;
+  };
+
+  const registerShortcut = (accelerator, handler) => {
+    const ok = globalShortcut.register(accelerator, handler);
+    if (!ok) {
+      console.error(`[shortcut] failed to register ${accelerator}`);
+    }
+  };
+
+  registerShortcut('Command', () => {
+    if (overlayShownFromHold || commandHoldTimer) {
+      return;
+    }
+    commandHoldTimer = setTimeout(() => {
+      commandHoldTimer = null;
+      console.info('[shortcut] Command long press detected, showing overlay');
+      markOverlayShownFromHold();
+    }, LONG_PRESS_THRESHOLD_MS);
+  });
+
+  registerShortcut('CommandUp', () => {
+    cancelHoldTimer();
+    if (overlayShownFromHold) {
+      console.info('[shortcut] Command released, hiding overlay');
+      resetOverlayHoldState();
+      toggleOverlay(false);
+    }
+  });
+
+  const commandKeyCodes = new Set([UiohookKey.Meta, UiohookKey.MetaRight]);
+
+  if (!uiohookKeydownHandler) {
+    uiohookKeydownHandler = (event) => {
+      if (commandKeyCodes.has(event.keycode)) {
+        if (overlayShownFromHold || commandHoldTimer) {
+          return;
+        }
+        commandHoldTimer = setTimeout(() => {
+          commandHoldTimer = null;
+          console.info('[shortcut] Command long press detected, showing overlay');
+          markOverlayShownFromHold();
+        }, LONG_PRESS_THRESHOLD_MS);
+      }
+    };
+    uIOhook.on('keydown', uiohookKeydownHandler);
+  }
+
+  if (!uiohookKeyupHandler) {
+    uiohookKeyupHandler = (event) => {
+      if (!commandKeyCodes.has(event.keycode)) {
+        return;
+      }
+      cancelHoldTimer();
+      if (overlayShownFromHold) {
+        console.info('[shortcut] Command released, hiding overlay');
+        resetOverlayHoldState();
+        toggleOverlay(false);
+      }
+    };
+    uIOhook.on('keyup', uiohookKeyupHandler);
+  }
+
+  if (!uiohookStarted) {
+    try {
+      uIOhook.start();
+      uiohookStarted = true;
+    } catch (error) {
+      console.error('[shortcut] failed to start global input hook', error);
+    }
+  }
+
+  registerShortcut('CommandOrControl+Shift+Space', () => {
+    cancelHoldTimer();
+    resetOverlayHoldState();
     const shouldShow = !overlayWindow || !overlayWindow.isVisible();
     toggleOverlay(shouldShow);
   });
 
-  globalShortcut.register('Escape', () => {
+  registerShortcut('Escape', () => {
+    cancelHoldTimer();
+    resetOverlayHoldState();
     toggleOverlay(false);
   });
 }
@@ -204,42 +498,88 @@ function createMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 }
 
-function ensureWindowLoaded(window, hash) {
-  loadWindow(window, hash);
-  window.webContents.on('did-fail-load', () => {
-    setTimeout(() => loadWindow(window, hash), 200);
+function ensureWindowLoaded(window, hash, options = {}) {
+  let retryCount = 0;
+  let fellBackToBundle = Boolean(options.forceFileInitial);
+
+  const attemptLoad = () => {
+    loadWindow(window, hash, { forceFile: fellBackToBundle });
+  };
+
+  window.webContents.on('did-finish-load', () => {
+    console.info(`[window] loaded ${hash || '/'} (retries: ${retryCount})`);
   });
+
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    retryCount += 1;
+    console.error(
+      `[window] load failed (#${retryCount})`,
+      { errorCode, errorDescription, validatedURL, hash }
+    );
+    if (isDev && retryCount >= 25 && !fellBackToBundle) {
+      console.error('[window] dev server unreachable after ~5s, falling back to built assets');
+      fellBackToBundle = true;
+      loadWindow(window, hash, { forceFile: true });
+      return;
+    }
+    setTimeout(attemptLoad, 200);
+  });
+
+  attemptLoad();
 }
 
 app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
 
-  if (isDev) {
-    const { createServer } = await import('vite');
-    const config = await import('../vite.config.ts');
-    const server = await createServer({
-      ...config.default,
-      configFile: false,
-      server: { port: DEV_SERVER_PORT, strictPort: true }
-    });
-    await server.listen();
+  startIpcServer();
+
+  await startDevServer();
+
+  const shouldShowMainOnBoot = process.env.WAINAO_SHOW_MAIN_ON_BOOT === '1';
+  const window = createStableWindow();
+
+  if (shouldShowMainOnBoot) {
+    window.show();
+    window.focus();
   }
 
-  const window = createStableWindow();
-  window.show();
-  window.focus();
   registerShortcuts();
   createMenu();
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (uiohookKeydownHandler) {
+    uIOhook.removeListener('keydown', uiohookKeydownHandler);
+    uiohookKeydownHandler = null;
+  }
+  if (uiohookKeyupHandler) {
+    uIOhook.removeListener('keyup', uiohookKeyupHandler);
+    uiohookKeyupHandler = null;
+  }
+  if (uiohookStarted) {
+    uIOhook.stop();
+    uiohookStarted = false;
+  }
+  if (ipcServer) {
+    ipcServer.close(() => {
+      ipcServer = null;
+    });
+  }
+  if (devServer) {
+    logBoot('shutting down Vite dev server');
+    devServer
+      .close()
+      .catch((error) => console.error('[boot] failed to stop Vite dev server', error))
+      .finally(() => {
+        devServer = null;
+      });
+  }
 });
 
 app.on('activate', () => {
-  if (!stableWindow) {
-    createStableWindow().show();
-  }
+  const window = createStableWindow();
+  window.show();
 });
 
 app.on('window-all-closed', () => {
